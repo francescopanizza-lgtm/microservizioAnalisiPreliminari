@@ -176,8 +176,15 @@ async def compila(
     file: UploadFile = File(...),
     dati: str = Form(...),
 ):
-    if not file.filename.endswith(".pptx"):
-        raise HTTPException(400, "Il file deve essere .pptx")
+    mime_pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    nome_ok = (file.filename or "").endswith(".pptx")
+    mime_ok = file.content_type == mime_pptx
+    if not nome_ok and not mime_ok:
+        raise HTTPException(
+            400,
+            f"Il file deve essere .pptx (ricevuto filename={file.filename!r}, "
+            f"content_type={file.content_type!r})",
+        )
 
     try:
         payload = json.loads(dati)
