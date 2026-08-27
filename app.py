@@ -95,6 +95,15 @@ def costruisci_sostituzioni(dati):
     cliente_desktop = pagespeed.get(("cliente", "desktop"))
     competitor_desktop = pagespeed.get(("competitor", "desktop"))
 
+    onpage = {r["label"]: r for r in dati.get("onpage", [])}
+
+    def val_onpage(label, campo, default="N/D"):
+        r = onpage.get(label)
+        if r is None or r.get("errore"):
+            return default
+        v = r.get(campo)
+        return default if v is None else str(v)
+
     sostituzioni = {
         "PSI_MOBILE_CLIENTE": val("cliente", "mobile", "punteggio"),
         "PSI_DESKTOP_CLIENTE": val("cliente", "desktop", "punteggio"),
@@ -114,6 +123,10 @@ def costruisci_sostituzioni(dati):
         "LIVELLO_COMPETITOR": livello_per_tempo(
             competitor_desktop.get("loadTimeSec") if competitor_desktop and not competitor_desktop.get("errore") else None
         ),
+        "ERRORI_TITLE_CLIENTE": val_onpage("cliente", "erroriTitle"),
+        "ERRORI_TITLE_COMPETITOR": val_onpage("competitor", "erroriTitle"),
+        "ERRORI_DESCRIPTION_CLIENTE": val_onpage("cliente", "erroriDescription"),
+        "ERRORI_DESCRIPTION_COMPETITOR": val_onpage("competitor", "erroriDescription"),
     }
 
     return sostituzioni, pagespeed
