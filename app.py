@@ -291,6 +291,19 @@ TITLE_MIN, TITLE_MAX = 30, 60
 DESC_MIN, DESC_MAX = 70, 155
 
 
+ESTENSIONI_NON_PAGINA = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico",
+    ".pdf", ".zip", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".mp4", ".mp3", ".avi", ".mov", ".css", ".js", ".xml", ".json",
+}
+
+
+def e_una_pagina(url):
+    """Esclude file media/documenti/asset tecnici trovati nelle sitemap (immagini, PDF, ecc.)."""
+    path = urlparse(url).path.lower()
+    return not any(path.endswith(ext) for ext in ESTENSIONI_NON_PAGINA)
+
+
 def stesso_dominio(url, dominio_base):
     try:
         return urlparse(url).netloc.lower().lstrip("www.") == dominio_base.lower().lstrip("www.")
@@ -320,14 +333,14 @@ def scopri_pagine(base_url, max_pagine=25):
                             continue
                         soup2 = BeautifulSoup(r2.content, "xml")
                         locs2 = [loc.text.strip() for loc in soup2.find_all("loc")]
-                        pagine.extend([u for u in locs2 if stesso_dominio(u, dominio)])
+                        pagine.extend([u for u in locs2 if stesso_dominio(u, dominio) and e_una_pagina(u)])
                     except Exception:
                         continue
                 pagine = pagine[:max_pagine]
             else:
                 # Sitemap diretta: <urlset> con pagine vere
                 locs = [loc.text.strip() for loc in soup.find_all("loc")]
-                pagine = [u for u in locs if stesso_dominio(u, dominio)][:max_pagine]
+                pagine = [u for u in locs if stesso_dominio(u, dominio) and e_una_pagina(u)][:max_pagine]
     except Exception:
         pass
 
@@ -349,7 +362,7 @@ def scopri_pagine(base_url, max_pagine=25):
             soup = BeautifulSoup(r.content, "html.parser")
             for a in soup.find_all("a", href=True):
                 link = urljoin(url, a["href"]).split("#")[0]
-                if stesso_dominio(link, dominio) and link not in visitate and link not in da_visitare:
+                if stesso_dominio(link, dominio) and e_una_pagina(link) and link not in visitate and link not in da_visitare:
                     da_visitare.append(link)
         except Exception:
             continue
