@@ -287,8 +287,6 @@ async def health():
 
 USER_AGENT = "Mozilla/5.0 (compatible; MPQuadroValutazioneBot/1.0)"
 TIMEOUT_SEC = 10
-TITLE_MIN, TITLE_MAX = 30, 60
-DESC_MIN, DESC_MAX = 70, 155
 
 
 ESTENSIONI_NON_PAGINA = {
@@ -396,20 +394,12 @@ def analizza_pagina(url):
 def valuta_title(title):
     if not title:
         return "mancante"
-    if len(title) < TITLE_MIN:
-        return "troppo corto"
-    if len(title) > TITLE_MAX:
-        return "troppo lungo"
     return None
 
 
 def valuta_description(desc):
     if not desc:
         return "mancante"
-    if len(desc) < DESC_MIN:
-        return "troppo corta"
-    if len(desc) > DESC_MAX:
-        return "troppo lunga"
     return None
 
 
@@ -460,7 +450,7 @@ async def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
         "dettaglio_errori_status": pagine_con_errore_status,
         "nota": (
             "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript "
-            "(possibili falsi positivi su siti che generano title/description via JS), "
-            "soglie title 30-60 caratteri e description 70-155 caratteri."
+            "(possibili falsi positivi su siti che generano title/description via JS). "
+            "Segnala solo title/description mancanti o duplicati tra le pagine analizzate."
         ),
     }
