@@ -409,6 +409,8 @@ async def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    max_pagine = min(max_pagine, 200)
+
     pagine = scopri_pagine(url, max_pagine)
     if not pagine:
         raise HTTPException(422, "Nessuna pagina raggiungibile per questo dominio")
