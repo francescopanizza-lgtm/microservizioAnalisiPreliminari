@@ -2,14 +2,16 @@
 Microservizio per la compilazione del template pptx (Valutazione Preliminare).
 Gestisce:
   1. Sostituzione placeholder di testo (WWW.DOMINIOCLIENTE.IT, {{TOKEN}})
-  2. Colore dinamico dei 4 cerchi punteggio PageSpeed (slide 3), individuati
-     tramite il campo "descr" (testo alternativo impostato in Google Slides)
+  2. Colore dinamico dei 4 cerchi punteggio PageSpeed (slide 3) e dei bordi
+     Load time (slide 4), individuati tramite il campo "descr" (testo
+     alternativo impostato in Google Slides)
+  3. Analisi on-page gratuita (title/description mancanti, troppo corti/
+     lunghi, duplicati) come sostituto minimale di Screaming Frog
 
-Endpoint: POST /compila
-Form-data:
-  - file: il file .pptx (binario, scaricato da Drive già convertito da Slides)
-  - dati: stringa JSON con la struttura prodotta dal nodo n8n "Componi payload finale"
-Risposta: il file .pptx compilato (binario)
+Endpoint:
+  POST /compila         -> compila il template (invariato)
+  POST /analizza-onpage -> crawla un sito e restituisce errori title/description
+  GET  /health
 """
 
 import io
@@ -17,7 +19,10 @@ import json
 import re
 import shutil
 import tempfile
+from urllib.parse import urljoin, urlparse
 
+import requests
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from pptx import Presentation
@@ -274,3 +279,157 @@ async def compila(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Analisi on-page gratuita (sostituto minimale di Screaming Frog)
+# ---------------------------------------------------------------------------
+
+USER_AGENT = "Mozilla/5.0 (compatible; MPQuadroValutazioneBot/1.0)"
+TIMEOUT_SEC = 10
+TITLE_MIN, TITLE_MAX = 30, 60
+DESC_MIN, DESC_MAX = 70, 155
+
+
+def stesso_dominio(url, dominio_base):
+    try:
+        return urlparse(url).netloc.lower().lstrip("www.") == dominio_base.lower().lstrip("www.")
+    except Exception:
+        return False
+
+
+def scopri_pagine(base_url, max_pagine=25):
+    """Prova prima la sitemap.xml; se assente/vuota, fa un crawl BFS semplice."""
+    dominio = urlparse(base_url).netloc
+    pagine = []
+
+    # Tentativo 1: sitemap.xml
+    try:
+        r = requests.get(urljoin(base_url, "/sitemap.xml"), headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC)
+        if r.status_code == 200 and "xml" in r.headers.get("Content-Type", ""):
+            soup = BeautifulSoup(r.content, "xml")
+            locs = [loc.text.strip() for loc in soup.find_all("loc")]
+            pagine = [u for u in locs if stesso_dominio(u, dominio)][:max_pagine]
+    except Exception:
+        pass
+
+    if pagine:
+        return pagine
+
+    # Tentativo 2: crawl BFS semplice partendo dalla homepage
+    visitate = set()
+    da_visitare = [base_url]
+    while da_visitare and len(visitate) < max_pagine:
+        url = da_visitare.pop(0)
+        if url in visitate:
+            continue
+        visitate.add(url)
+        try:
+            r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.content, "html.parser")
+            for a in soup.find_all("a", href=True):
+                link = urljoin(url, a["href"]).split("#")[0]
+                if stesso_dominio(link, dominio) and link not in visitate and link not in da_visitare:
+                    da_visitare.append(link)
+        except Exception:
+            continue
+
+    return list(visitate)[:max_pagine]
+
+
+def analizza_pagina(url):
+    try:
+        r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC, allow_redirects=True)
+    except Exception as e:
+        return {"url": url, "status": None, "errore_richiesta": str(e), "title": None, "description": None}
+
+    risultato = {"url": url, "status": r.status_code, "errore_richiesta": None}
+
+    if r.status_code >= 400:
+        risultato["title"] = None
+        risultato["description"] = None
+        return risultato
+
+    soup = BeautifulSoup(r.content, "html.parser")
+    title_tag = soup.find("title")
+    desc_tag = soup.find("meta", attrs={"name": "description"})
+
+    risultato["title"] = title_tag.text.strip() if title_tag and title_tag.text else None
+    risultato["description"] = desc_tag.get("content", "").strip() if desc_tag and desc_tag.get("content") else None
+
+    return risultato
+
+
+def valuta_title(title):
+    if not title:
+        return "mancante"
+    if len(title) < TITLE_MIN:
+        return "troppo corto"
+    if len(title) > TITLE_MAX:
+        return "troppo lungo"
+    return None
+
+
+def valuta_description(desc):
+    if not desc:
+        return "mancante"
+    if len(desc) < DESC_MIN:
+        return "troppo corta"
+    if len(desc) > DESC_MAX:
+        return "troppo lunga"
+    return None
+
+
+@app.post("/analizza-onpage")
+async def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    pagine = scopri_pagine(url, max_pagine)
+    if not pagine:
+        raise HTTPException(422, "Nessuna pagina raggiungibile per questo dominio")
+
+    risultati = [analizza_pagina(p) for p in pagine]
+
+    titoli = [r["title"] for r in risultati if r["title"]]
+    descrizioni = [r["description"] for r in risultati if r["description"]]
+    duplicati_titoli = {t for t in titoli if titoli.count(t) > 1}
+    duplicati_descrizioni = {d for d in descrizioni if descrizioni.count(d) > 1}
+
+    pagine_con_errore_title = []
+    pagine_con_errore_description = []
+    pagine_con_errore_status = []
+
+    for r in risultati:
+        if r["status"] is None or r["status"] >= 400:
+            pagine_con_errore_status.append({"url": r["url"], "status": r["status"], "dettaglio": r.get("errore_richiesta")})
+            continue
+        problema_title = valuta_title(r["title"])
+        if not problema_title and r["title"] in duplicati_titoli:
+            problema_title = "duplicato"
+        if problema_title:
+            pagine_con_errore_title.append({"url": r["url"], "problema": problema_title, "valore": r["title"]})
+
+        problema_desc = valuta_description(r["description"])
+        if not problema_desc and r["description"] in duplicati_descrizioni:
+            problema_desc = "duplicata"
+        if problema_desc:
+            pagine_con_errore_description.append({"url": r["url"], "problema": problema_desc, "valore": r["description"]})
+
+    return {
+        "dominio": url,
+        "pagine_analizzate": len(risultati),
+        "conteggio_errori_title": len(pagine_con_errore_title),
+        "conteggio_errori_description": len(pagine_con_errore_description),
+        "conteggio_errori_status": len(pagine_con_errore_status),
+        "dettaglio_errori_title": pagine_con_errore_title,
+        "dettaglio_errori_description": pagine_con_errore_description,
+        "dettaglio_errori_status": pagine_con_errore_status,
+        "nota": (
+            "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript "
+            "(possibili falsi positivi su siti che generano title/description via JS), "
+            "soglie title 30-60 caratteri e description 70-155 caratteri."
+        ),
+    }
