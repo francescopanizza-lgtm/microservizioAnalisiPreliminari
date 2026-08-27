@@ -14,6 +14,7 @@ Endpoint:
   GET  /health
 """
 
+import concurrent.futures
 import io
 import json
 import re
@@ -412,7 +413,12 @@ async def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
     if not pagine:
         raise HTTPException(422, "Nessuna pagina raggiungibile per questo dominio")
 
-    risultati = [analizza_pagina(p) for p in pagine]
+    # Scarico le pagine in parallelo (non in sequenza): con richieste I/O-bound
+    # come queste, il tempo totale è dominato dall'attesa di rete, non dal calcolo,
+    # quindi il parallelismo riduce il tempo totale quasi linearmente con il numero
+    # di worker, invece di sommare i tempi di ogni singola richiesta.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        risultati = list(executor.map(analizza_pagina, pagine))
 
     titoli = [r["title"] for r in risultati if r["title"]]
     descrizioni = [r["description"] for r in risultati if r["description"]]
