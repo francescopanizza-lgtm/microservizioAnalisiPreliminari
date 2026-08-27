@@ -299,17 +299,35 @@ def stesso_dominio(url, dominio_base):
 
 
 def scopri_pagine(base_url, max_pagine=25):
-    """Prova prima la sitemap.xml; se assente/vuota, fa un crawl BFS semplice."""
+    """Prova prima la sitemap.xml (gestendo anche sitemap-indice); se assente/vuota, fa un crawl BFS semplice."""
     dominio = urlparse(base_url).netloc
     pagine = []
 
-    # Tentativo 1: sitemap.xml
     try:
         r = requests.get(urljoin(base_url, "/sitemap.xml"), headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC)
         if r.status_code == 200 and "xml" in r.headers.get("Content-Type", ""):
             soup = BeautifulSoup(r.content, "xml")
-            locs = [loc.text.strip() for loc in soup.find_all("loc")]
-            pagine = [u for u in locs if stesso_dominio(u, dominio)][:max_pagine]
+
+            if soup.find("sitemapindex"):
+                # È un indice: contiene link ad altre sitemap, non pagine dirette
+                sotto_sitemap = [loc.text.strip() for loc in soup.find_all("loc")][:10]
+                for sm_url in sotto_sitemap:
+                    if len(pagine) >= max_pagine:
+                        break
+                    try:
+                        r2 = requests.get(sm_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC)
+                        if r2.status_code != 200:
+                            continue
+                        soup2 = BeautifulSoup(r2.content, "xml")
+                        locs2 = [loc.text.strip() for loc in soup2.find_all("loc")]
+                        pagine.extend([u for u in locs2 if stesso_dominio(u, dominio)])
+                    except Exception:
+                        continue
+                pagine = pagine[:max_pagine]
+            else:
+                # Sitemap diretta: <urlset> con pagine vere
+                locs = [loc.text.strip() for loc in soup.find_all("loc")]
+                pagine = [u for u in locs if stesso_dominio(u, dominio)][:max_pagine]
     except Exception:
         pass
 
