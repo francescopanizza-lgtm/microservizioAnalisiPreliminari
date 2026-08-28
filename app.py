@@ -417,24 +417,8 @@ def valuta_description(desc):
     return None
 
 
-@app.post("/analizza-onpage")
-def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-
-    max_pagine = min(max_pagine, 200)
-
-    pagine = scopri_pagine(url, max_pagine)
-    if not pagine:
-        raise HTTPException(422, "Nessuna pagina raggiungibile per questo dominio")
-
-    # Scarico le pagine in parallelo (non in sequenza): con richieste I/O-bound
-    # come queste, il tempo totale è dominato dall'attesa di rete, non dal calcolo,
-    # quindi il parallelismo riduce il tempo totale quasi linearmente con il numero
-    # di worker, invece di sommare i tempi di ogni singola richiesta.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        risultati = list(executor.map(analizza_pagina, pagine))
-
+def valuta_risultati_pagine(risultati, dominio):
+    """Aggrega i risultati di crawl di un singolo sito in un riepilogo errori."""
     titoli = [r["title"] for r in risultati if r["title"]]
     descrizioni = [r["description"] for r in risultati if r["description"]]
     duplicati_titoli = {t for t in titoli if titoli.count(t) > 1}
@@ -461,7 +445,7 @@ def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
             pagine_con_errore_description.append({"url": r["url"], "problema": problema_desc, "valore": r["description"]})
 
     return {
-        "dominio": url,
+        "dominio": dominio,
         "pagine_analizzate": len(risultati),
         "conteggio_errori_title": len(pagine_con_errore_title),
         "conteggio_errori_description": len(pagine_con_errore_description),
@@ -469,9 +453,80 @@ def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
         "dettaglio_errori_title": pagine_con_errore_title,
         "dettaglio_errori_description": pagine_con_errore_description,
         "dettaglio_errori_status": pagine_con_errore_status,
+    }
+
+
+@app.post("/analizza-onpage")
+def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    max_pagine = min(max_pagine, 200)
+
+    pagine = scopri_pagine(url, max_pagine)
+    if not pagine:
+        raise HTTPException(422, "Nessuna pagina raggiungibile per questo dominio")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        risultati = list(executor.map(analizza_pagina, pagine))
+
+    risultato = valuta_risultati_pagine(risultati, url)
+    risultato["nota"] = (
+        "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript "
+        "(possibili falsi positivi su siti che generano title/description via JS). "
+        "Segnala solo title/description mancanti o duplicati tra le pagine analizzate."
+    )
+    return risultato
+
+
+@app.post("/analizza-onpage-duplice")
+def analizza_onpage_duplice(
+    url_cliente: str = Form(...),
+    url_competitor: str = Form(...),
+    max_pagine: int = Form(25),
+):
+    """
+    Analizza cliente e competitor in UNA sola chiamata, condividendo lo stesso
+    pool di thread: evita che n8n, chiamando i due siti in due richieste HTTP
+    separate (spesso in sequenza, non in parallelo), sommi i tempi dei due
+    crawl invece di sovrapporli.
+    """
+
+    def prepara(url):
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return url
+
+    url_cliente = prepara(url_cliente)
+    url_competitor = prepara(url_competitor)
+    max_pagine = min(max_pagine, 200)
+
+    pagine_cliente = scopri_pagine(url_cliente, max_pagine)
+    pagine_competitor = scopri_pagine(url_competitor, max_pagine)
+
+    if not pagine_cliente and not pagine_competitor:
+        raise HTTPException(422, "Nessuna pagina raggiungibile né per il cliente né per il competitor")
+
+    # Stesso pool condiviso per entrambi i siti: le richieste dei due domini
+    # si sovrappongono nel tempo invece di essere l'una in coda all'altra.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        future_cliente = [executor.submit(analizza_pagina, p) for p in pagine_cliente]
+        future_competitor = [executor.submit(analizza_pagina, p) for p in pagine_competitor]
+        risultati_cliente = [f.result() for f in future_cliente]
+        risultati_competitor = [f.result() for f in future_competitor]
+
+    return {
+        "cliente": valuta_risultati_pagine(risultati_cliente, url_cliente) if pagine_cliente else {
+            "dominio": url_cliente, "pagine_analizzate": 0, "conteggio_errori_title": None,
+            "conteggio_errori_description": None, "conteggio_errori_status": None,
+        },
+        "competitor": valuta_risultati_pagine(risultati_competitor, url_competitor) if pagine_competitor else {
+            "dominio": url_competitor, "pagine_analizzate": 0, "conteggio_errori_title": None,
+            "conteggio_errori_description": None, "conteggio_errori_status": None,
+        },
         "nota": (
-            "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript "
-            "(possibili falsi positivi su siti che generano title/description via JS). "
-            "Segnala solo title/description mancanti o duplicati tra le pagine analizzate."
+            "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript. "
+            "Segnala solo title/description mancanti o duplicati tra le pagine analizzate "
+            "(duplicati calcolati separatamente per ciascun dominio)."
         ),
     }
