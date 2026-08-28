@@ -227,7 +227,7 @@ def colora_cerchi(slide, pagespeed):
 
 
 @app.post("/compila")
-async def compila(
+def compila(
     file: UploadFile = File(...),
     dati: str = Form(...),
 ):
@@ -418,7 +418,7 @@ def valuta_description(desc):
 
 
 @app.post("/analizza-onpage")
-async def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
+def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
