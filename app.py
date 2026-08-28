@@ -460,6 +460,9 @@ def valuta_description(desc):
     return None
 
 
+VERSIONE_CODICE = "2026-08-28-fix-normalizzazione-url"
+
+
 def valuta_risultati_pagine(risultati, dominio):
     """Aggrega i risultati di crawl di un singolo sito in un riepilogo errori."""
     titoli = [r["title"] for r in risultati if r["title"]]
@@ -514,6 +517,7 @@ def analizza_onpage(url: str = Form(...), max_pagine: int = Form(25)):
         risultati = list(executor.map(analizza_pagina, pagine))
 
     risultato = valuta_risultati_pagine(risultati, url)
+    risultato["versione_codice"] = VERSIONE_CODICE
     risultato["nota"] = (
         "Analisi indicativa: copertura limitata a max_pagine, non esegue JavaScript "
         "(possibili falsi positivi su siti che generano title/description via JS). "
