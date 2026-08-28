@@ -320,6 +320,19 @@ PATTERN_NON_CONTENUTO = [
 ]
 
 
+def normalizza_per_confronto(url):
+    """Riduce un URL alla sua forma essenziale (dominio + percorso) ignorando
+    http/https, www, e slash finale — per riconoscere come 'stessa pagina'
+    varianti come https://www.sito.it e http://sito.it/ che altrimenti
+    verrebbero contate come pagine distinte e segnalate come falsi duplicati."""
+    p = urlparse(url)
+    netloc = p.netloc.lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    path = p.path.rstrip("/") or "/"
+    return netloc + path
+
+
 def e_una_pagina(url):
     """Esclude file media/documenti/asset tecnici e pagine CMS generate automaticamente
     (categorie, tag, paginazione) che non sono contenuto editoriale vero e proprio."""
@@ -372,7 +385,19 @@ def scopri_pagine(base_url, max_pagine=25):
     # sotto-sitemap (capita su WordPress), e senza questo passaggio verrebbe
     # scaricato e valutato più volte, facendo scattare falsi "duplicato"
     # contro se stesso invece che contro un'altra pagina reale.
-    pagine = list(dict.fromkeys(pagine))[:max_pagine]
+    # Deduplica PRIMA di tagliare a max_pagine: la stessa pagina può comparire
+    # più volte con varianti diverse (con/senza www, http/https, slash finale,
+    # o ripetuta in più sotto-sitemap) — senza normalizzare per il confronto,
+    # verrebbe scaricata più volte e segnalata come falso "duplicato" contro
+    # se stessa invece che contro un'altra pagina reale.
+    visti = set()
+    pagine_dedup = []
+    for u in pagine:
+        chiave = normalizza_per_confronto(u)
+        if chiave not in visti:
+            visti.add(chiave)
+            pagine_dedup.append(u)
+    pagine = pagine_dedup[:max_pagine]
 
     if pagine:
         return pagine
