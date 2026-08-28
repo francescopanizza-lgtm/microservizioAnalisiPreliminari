@@ -309,11 +309,26 @@ ESTENSIONI_NON_PAGINA = {
     ".mp4", ".mp3", ".avi", ".mov", ".css", ".js", ".xml", ".json",
 }
 
+# Pattern di percorso tipici di pagine generate automaticamente da CMS
+# (archivi categoria/tag, paginazione, feed, autore) che normalmente non
+# hanno title/description propri e che un audit SEO reale esclude di default
+# (Screaming Frog e simili li escludono o li tratta come categoria separata).
+PATTERN_NON_CONTENUTO = [
+    "/category/", "/categoria/", "/tag/", "/tags/", "/author/", "/autore/",
+    "/page/", "/pagina/", "/feed/", "/wp-json/", "/wp-admin/", "/wp-login",
+    "/attachment/",
+]
+
 
 def e_una_pagina(url):
-    """Esclude file media/documenti/asset tecnici trovati nelle sitemap (immagini, PDF, ecc.)."""
+    """Esclude file media/documenti/asset tecnici e pagine CMS generate automaticamente
+    (categorie, tag, paginazione) che non sono contenuto editoriale vero e proprio."""
     path = urlparse(url).path.lower()
-    return not any(path.endswith(ext) for ext in ESTENSIONI_NON_PAGINA)
+    if any(path.endswith(ext) for ext in ESTENSIONI_NON_PAGINA):
+        return False
+    if any(pattern in path for pattern in PATTERN_NON_CONTENUTO):
+        return False
+    return True
 
 
 def stesso_dominio(url, dominio_base):
@@ -337,8 +352,6 @@ def scopri_pagine(base_url, max_pagine=25):
                 # È un indice: contiene link ad altre sitemap, non pagine dirette
                 sotto_sitemap = [loc.text.strip() for loc in soup.find_all("loc")][:10]
                 for sm_url in sotto_sitemap:
-                    if len(pagine) >= max_pagine:
-                        break
                     try:
                         r2 = requests.get(sm_url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SEC)
                         if r2.status_code != 200:
@@ -348,13 +361,18 @@ def scopri_pagine(base_url, max_pagine=25):
                         pagine.extend([u for u in locs2 if stesso_dominio(u, dominio) and e_una_pagina(u)])
                     except Exception:
                         continue
-                pagine = pagine[:max_pagine]
             else:
                 # Sitemap diretta: <urlset> con pagine vere
                 locs = [loc.text.strip() for loc in soup.find_all("loc")]
-                pagine = [u for u in locs if stesso_dominio(u, dominio) and e_una_pagina(u)][:max_pagine]
+                pagine = [u for u in locs if stesso_dominio(u, dominio) and e_una_pagina(u)]
     except Exception:
         pass
+
+    # Deduplica PRIMA di tagliare a max_pagine: un URL può comparire in più
+    # sotto-sitemap (capita su WordPress), e senza questo passaggio verrebbe
+    # scaricato e valutato più volte, facendo scattare falsi "duplicato"
+    # contro se stesso invece che contro un'altra pagina reale.
+    pagine = list(dict.fromkeys(pagine))[:max_pagine]
 
     if pagine:
         return pagine
